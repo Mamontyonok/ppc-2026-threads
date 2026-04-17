@@ -21,48 +21,67 @@ class KulikARunPerfTestThreads : public ppc::util::BaseRunPerfTests<InType, OutT
     size_t n = 20000;
     size_t m = 20000;
     size_t k = 20000;         // Размеры матриц (n x k) и (k x m)
-    size_t nnz_per_col = 50;  // кол-во ненулевых элементов в столбце
-    size_t band_width = 175;  // ленточная матрица для лучшей локальности данных
+    size_t nnz_per_col = 64;  // кол-во ненулевых элементов в столбце
+    size_t band_width = 90;  // ленточная матрица для лучшей локальности данных
 
     auto generate_ccs = [&](size_t rows, size_t cols) {
-      CCS mat;
-      mat.n = rows;
-      mat.m = cols;
-      mat.col_ind.assign(cols + 1, 0);
-      mat.row.reserve(cols * nnz_per_col);
-      mat.value.reserve(cols * nnz_per_col);
+    CCS mat;
+    mat.n = rows;
+    mat.m = cols;
+    mat.col_ind.assign(cols + 1, 0);
+    mat.row.reserve(cols * nnz_per_col);
+    mat.value.reserve(cols * nnz_per_col);
 
-      std::random_device rd;
-      std::mt19937 gen(rd());
-      std::uniform_real_distribution<double> dist_val(-10.0, 10.0);
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<double> dist_val(-10.0, 10.0);
 
-      for (size_t j = 0; j < cols; ++j) {
+    for (size_t j = 0; j < cols; ++j) {
         mat.col_ind[j] = mat.row.size();
-        size_t min_r = 0;
-        if (j >= band_width) {
-          min_r = j - band_width;
-        }
-        size_t max_r = std::min(rows - 1, j + band_width);
 
-        std::vector<size_t> current_rows;
-        current_rows.push_back(j % rows);
+        size_t center = j % rows;
 
-        std::uniform_int_distribution<size_t> dist_row(min_r, max_r);
-        while (current_rows.size() < nnz_per_col) {
-          size_t r = dist_row(gen);
-          if (std::ranges::find(current_rows, r) == current_rows.end()) {
-            current_rows.push_back(r);
-          }
+        size_t half = nnz_per_col / 2;
+        size_t start = (center >= half) ? center - half : 0;
+        size_t end = start + nnz_per_col - 1;
+
+        if (end >= rows) {
+            end = rows - 1;
+            start = (end >= nnz_per_col - 1) ? end - (nnz_per_col - 1) : 0;
         }
-        std::ranges::sort(current_rows);
-        for (size_t row : current_rows) {
-          mat.row.push_back(row);
-          mat.value.push_back(dist_val(gen));
+
+        size_t band_limit = band_width;
+        size_t min_allowed = (j >= band_limit) ? j - band_limit : 0;
+        size_t max_allowed = std::min(rows - 1, j + band_limit);
+
+        if (start < min_allowed) start = min_allowed;
+
+        if (start + nnz_per_col - 1 > max_allowed) {
+            if (max_allowed >= nnz_per_col - 1)
+                start = max_allowed - nnz_per_col + 1;
+            else
+                start = min_allowed;
         }
-      }
-      mat.col_ind[cols] = mat.row.size();
-      mat.nz = mat.row.size();
-      return mat;
+
+        std::vector<size_t> rows_in_col;
+
+        for (size_t r = start; r < start + nnz_per_col; ++r) {
+            rows_in_col.push_back(r);
+        }
+
+        if (std::find(rows_in_col.begin(), rows_in_col.end(), center) == rows_in_col.end()) {
+            rows_in_col[0] = center;
+            std::sort(rows_in_col.begin(), rows_in_col.end());
+        }
+
+        for (size_t row : rows_in_col) {
+            mat.row.push_back(row);
+            mat.value.push_back(dist_val(gen));
+            }
+        }
+        mat.col_ind[cols] = mat.row.size();
+        mat.nz = mat.row.size();
+        return mat;
     };
 
     input_data_ = std::make_tuple(generate_ccs(n, k), generate_ccs(k, m));
