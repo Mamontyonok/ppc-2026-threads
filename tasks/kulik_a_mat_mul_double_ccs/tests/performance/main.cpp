@@ -22,69 +22,70 @@ class KulikARunPerfTestThreads : public ppc::util::BaseRunPerfTests<InType, OutT
     size_t m = 20000;
     size_t k = 20000;         // Размеры матриц (n x k) и (k x m)
     size_t nnz_per_col = 64;  // кол-во ненулевых элементов в столбце
-    size_t band_width = 100;   // ленточная матрица для лучшей локальности данных
+    size_t band_width = 100;  // ленточная матрица для лучшей локальности данных
 
     auto generate_ccs = [&](size_t rows, size_t cols) {
-      CCS mat;
-      mat.n = rows;
-      mat.m = cols;
-      mat.col_ind.assign(cols + 1, 0);
-      mat.row.reserve(cols * nnz_per_col);
-      mat.value.reserve(cols * nnz_per_col);
+        CCS mat;
+        mat.n = rows;
+        mat.m = cols;
+        mat.col_ind.assign(cols + 1, 0);
+        mat.row.reserve(cols * nnz_per_col);
+        mat.value.reserve(cols * nnz_per_col);
 
-      std::random_device rd;
-      std::mt19937 gen(rd());
-      std::uniform_real_distribution<double> dist_val(-10.0, 10.0);
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_real_distribution<double> dist_val(-10.0, 10.0);
 
-      for (size_t j = 0; j < cols; ++j) {
-        mat.col_ind[j] = mat.row.size();
+        for (size_t j = 0; j < cols; ++j) {
+            mat.col_ind[j] = mat.row.size();
 
-        size_t center = j % rows;
+            size_t min_allowed = (j >= band_width) ? j - band_width : 0;
+            size_t max_allowed = std::min(rows - 1, j + band_width);
 
-        size_t half = nnz_per_col / 2;
-        size_t start = (center >= half) ? center - half : 0;
-        size_t end = start + nnz_per_col - 1;
+            size_t center = (rows == cols) ? j : (j % rows);
 
-        if (end >= rows) {
-          end = rows - 1;
-          start = (end >= nnz_per_col - 1) ? end - (nnz_per_col - 1) : 0;
+            size_t half = nnz_per_col / 2;
+            size_t start = (center >= half) ? center - half : 0;
+
+            if (start + nnz_per_col > rows) {
+                start = (rows > nnz_per_col) ? rows - nnz_per_col : 0;
+            }
+
+            if (start < min_allowed) {
+                start = min_allowed;
+            }
+            if (start + nnz_per_col - 1 > max_allowed) {
+                if (max_allowed >= nnz_per_col - 1) {
+                    start = max_allowed - nnz_per_col + 1;
+                } else {
+                    start = min_allowed;
+                }
+            }
+
+            if (center < start || center > start + nnz_per_col - 1) {
+                if (center >= min_allowed && center <= max_allowed) {
+                    if (center < start) {
+                        start = center;
+                        if (start + nnz_per_col - 1 > max_allowed) {
+                            start = (max_allowed >= nnz_per_col - 1) ? max_allowed - nnz_per_col + 1 : min_allowed;
+                        }
+                    } else { 
+                        start = (center >= nnz_per_col - 1) ? center - nnz_per_col + 1 : 0;
+                        if (start < min_allowed) {
+                            start = min_allowed;
+                        }
+                    }
+                }
+            }
+
+            for (size_t r = start; r < start + nnz_per_col; ++r) {
+                mat.row.push_back(r);
+                mat.value.push_back(dist_val(gen));
+            }
         }
-
-        size_t band_limit = band_width;
-        size_t min_allowed = (j >= band_limit) ? j - band_limit : 0;
-        size_t max_allowed = std::min(rows - 1, j + band_limit);
-
-        if (start < min_allowed) {
-          start = min_allowed;
-        }
-
-        if (start + nnz_per_col - 1 > max_allowed) {
-          if (max_allowed >= nnz_per_col - 1) {
-            start = max_allowed - nnz_per_col + 1;
-          } else {
-            start = min_allowed;
-          }
-        }
-
-        std::vector<size_t> rows_in_col;
-
-        for (size_t r = start; r < start + nnz_per_col; ++r) {
-          rows_in_col.push_back(r);
-        }
-
-        if (std::find(rows_in_col.begin(), rows_in_col.end(), center) == rows_in_col.end()) {
-          rows_in_col[0] = center;
-          std::sort(rows_in_col.begin(), rows_in_col.end());
-        }
-
-        for (size_t row : rows_in_col) {
-          mat.row.push_back(row);
-          mat.value.push_back(dist_val(gen));
-        }
-      }
-      mat.col_ind[cols] = mat.row.size();
-      mat.nz = mat.row.size();
-      return mat;
+        mat.col_ind[cols] = mat.row.size();
+        mat.nz = mat.row.size();
+        return mat;
     };
 
     input_data_ = std::make_tuple(generate_ccs(n, k), generate_ccs(k, m));
