@@ -22,7 +22,7 @@ class KulikARunPerfTestThreads : public ppc::util::BaseRunPerfTests<InType, OutT
     size_t m = 20000;
     size_t k = 20000;         // Размеры матриц (n x k) и (k x m)
     size_t nnz_per_col = 64;  // кол-во ненулевых элементов в столбце
-    size_t band_width = 64;   // ленточная матрица для лучшей локальности данных
+    size_t band_width = 100;   // ленточная матрица для лучшей локальности данных
 
     auto generate_ccs = [&](size_t rows, size_t cols) {
       CCS mat;
