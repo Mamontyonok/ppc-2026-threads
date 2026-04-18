@@ -1,17 +1,16 @@
 #include "kulik_a_mat_mul_double_ccs/tbb/include/ops_tbb.hpp"
 
+#include <tbb/blocked_range.h>
+#include <tbb/enumerable_thread_specific.h>
+#include <tbb/tbb.h>
+
 #include <algorithm>
 #include <cstddef>
 #include <tuple>
 #include <vector>
 
-#include <tbb/blocked_range.h>
-#include <tbb/enumerable_thread_specific.h>
-#include <tbb/tbb.h>
-
-#include "tbb/parallel_for.h"
-
 #include "kulik_a_mat_mul_double_ccs/common/include/common.hpp"
+#include "tbb/parallel_for.h"
 
 namespace kulik_a_mat_mul_double_ccs {
 
@@ -40,7 +39,7 @@ bool KulikAMatMulDoubleCcsTBB::RunImpl() {
   const auto &a = std::get<0>(GetInput());
   const auto &b = std::get<1>(GetInput());
   OutType &c = GetOutput();
-  
+
   c.n = a.n;
   c.m = b.m;
   c.col_ind.assign(c.m + 1, 0);
@@ -51,14 +50,14 @@ bool KulikAMatMulDoubleCcsTBB::RunImpl() {
   ThreadLocalData exemplar;
   exemplar.accum.assign(a.n, 0.0);
   exemplar.nz_elem_rows.assign(a.n, false);
-  
+
   tbb::enumerable_thread_specific<ThreadLocalData> tls(exemplar);
 
-  tbb::parallel_for(tbb::blocked_range<size_t>(0, b.m), [&](const tbb::blocked_range<size_t>& r) {
-    auto& t_data = tls.local();
-    auto& accum = t_data.accum;
-    auto& nz_elem_rows = t_data.nz_elem_rows;
-    auto& nnz_rows = t_data.nnz_rows;
+  tbb::parallel_for(tbb::blocked_range<size_t>(0, b.m), [&](const tbb::blocked_range<size_t> &r) {
+    auto &t_data = tls.local();
+    auto &accum = t_data.accum;
+    auto &nz_elem_rows = t_data.nz_elem_rows;
+    auto &nnz_rows = t_data.nnz_rows;
 
     for (size_t j = r.begin(); j != r.end(); ++j) {
       for (size_t k = b.col_ind[j]; k < b.col_ind[j + 1]; ++k) {
@@ -67,7 +66,7 @@ bool KulikAMatMulDoubleCcsTBB::RunImpl() {
         for (size_t zc = a.col_ind[ind]; zc < a.col_ind[ind + 1]; ++zc) {
           size_t i = a.row[zc];
           double a_val = a.value[zc];
-          
+
           accum[i] += a_val * b_val;
           if (!nz_elem_rows[i]) {
             nz_elem_rows[i] = true;
@@ -101,7 +100,7 @@ bool KulikAMatMulDoubleCcsTBB::RunImpl() {
   c.value.resize(total_nz);
   c.row.resize(total_nz);
 
-  tbb::parallel_for(tbb::blocked_range<size_t>(0, b.m), [&](const tbb::blocked_range<size_t>& r) {
+  tbb::parallel_for(tbb::blocked_range<size_t>(0, b.m), [&](const tbb::blocked_range<size_t> &r) {
     for (size_t j = r.begin(); j != r.end(); ++j) {
       size_t offset = c.col_ind[j];
       size_t col_nz = local_values[j].size();

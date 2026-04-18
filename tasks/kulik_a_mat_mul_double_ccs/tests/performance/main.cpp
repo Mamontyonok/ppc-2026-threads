@@ -150,8 +150,9 @@ TEST_P(KulikARunPerfTestThreads, RunPerfModes) {
 
 namespace {
 
-const auto kAllPerfTasks = ppc::util::MakeAllPerfTasks<InType, KulikAMatMulDoubleCcsSEQ, KulikAMatMulDoubleCcsOMP, KulikAMatMulDoubleCcsTBB>(
-    PPC_SETTINGS_kulik_a_mat_mul_double_ccs);
+const auto kAllPerfTasks =
+    ppc::util::MakeAllPerfTasks<InType, KulikAMatMulDoubleCcsSEQ, KulikAMatMulDoubleCcsOMP, KulikAMatMulDoubleCcsTBB>(
+        PPC_SETTINGS_kulik_a_mat_mul_double_ccs);
 
 const auto kGtestValues = ppc::util::TupleToGTestValues(kAllPerfTasks);
 
