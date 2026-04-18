@@ -18,7 +18,7 @@ namespace kulik_a_mat_mul_double_ccs {
 class KulikARunPerfTestThreads : public ppc::util::BaseRunPerfTests<InType, OutType> {
   InType input_data_;
 
-  void SetUp() override {
+  /*void SetUp() override {
     size_t n = 20000;
     size_t m = 20000;
     size_t k = 20000;         // Размеры матриц (n x k) и (k x m)
@@ -90,7 +90,48 @@ class KulikARunPerfTestThreads : public ppc::util::BaseRunPerfTests<InType, OutT
     };
 
     input_data_ = std::make_tuple(generate_ccs(n, k), generate_ccs(k, m));
+  }*/
+
+  void SetUp() override {
+    int dim = 40000;
+    int seed = 0;
+    CCS &a = std::get<0>(input_data_);
+    CCS &b = std::get<1>(input_data_);
+
+    std::mt19937 rng(seed);
+    std::uniform_real_distribution<double> val_gen(1.0, 2.0);
+
+    a.m = dim;
+    a.n = dim;
+    a.col_ind.assign(a.n + 1, 0);
+    for (size_t j = 0; j < a.n; ++j) {
+      int left = std::max(static_cast<int>(j - 50), 0);
+      int right = std::min(a.n, j + 50);
+      a.col_ind[j + 1] = a.col_ind[j] + right - left;
+      for (int k = left; k < right; ++k) {
+        double r = val_gen(rng);
+        a.row.push_back(k);
+        a.value.push_back(r);
+      }
+    }
+
+    b.m = dim;
+    b.n = dim;
+    b.col_ind.assign(b.n + 1, 0);
+    for (size_t j = 0; j < b.n; ++j) {
+      int left = std::max(static_cast<int>(j - 50), 0);
+      int right = std::min(b.n, j + 50);
+      b.col_ind[j + 1] = b.col_ind[j] + right - left;
+      for (int k = left; k < right; ++k) {
+        double r = val_gen(rng);
+        b.row.push_back(k);
+        b.value.push_back(r);
+      }
+    }
+
+    input_data_ = std::make_tuple(a, b);
   }
+
   bool CheckTestOutputData(OutType &output_data) final {
     const auto &a = std::get<0>(input_data_);
     const auto &b = std::get<1>(input_data_);
