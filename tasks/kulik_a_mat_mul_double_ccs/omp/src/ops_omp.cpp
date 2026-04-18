@@ -11,12 +11,12 @@
 
 namespace kulik_a_mat_mul_double_ccs {
 
-void KulikAMatMulDoubleCcsOMP::ProcessColumn(size_t j, int tid, const CCS &a, const CCS &b,
-                                             std::vector<std::vector<double>> &thread_accum,
-                                             std::vector<std::vector<bool>> &thread_nz,
-                                             std::vector<std::vector<size_t>> &thread_nnz_rows,
-                                             std::vector<std::vector<double>> &local_values,
-                                             std::vector<std::vector<size_t>> &local_rows) {
+namespace {
+
+inline void ProcessColumn(size_t j, int tid, const CCS &a, const CCS &b, std::vector<std::vector<double>> &thread_accum,
+                          std::vector<std::vector<bool>> &thread_nz, std::vector<std::vector<size_t>> &thread_nnz_rows,
+                          std::vector<std::vector<double>> &local_values,
+                          std::vector<std::vector<size_t>> &local_rows) {
   for (size_t k = b.col_ind[j]; k < b.col_ind[j + 1]; ++k) {
     size_t ind = b.row[k];
     double b_val = b.value[k];
@@ -43,6 +43,7 @@ void KulikAMatMulDoubleCcsOMP::ProcessColumn(size_t j, int tid, const CCS &a, co
   }
   thread_nnz_rows[tid].clear();
 }
+}  // namespace
 
 KulikAMatMulDoubleCcsOMP::KulikAMatMulDoubleCcsOMP(const InType &in) {
   SetTypeOfTask(GetStaticTypeOfTask());
