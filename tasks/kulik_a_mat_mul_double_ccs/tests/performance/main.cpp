@@ -106,7 +106,7 @@ class KulikARunPerfTestThreads : public ppc::util::BaseRunPerfTests<InType, OutT
     a.col_ind.assign(a.n + 1, 0);
     for (size_t j = 0; j < a.n; ++j) {
       int left = std::max(static_cast<int>(j - 50), 0);
-      int right = std::min(a.n, j + 50);
+      int right = static_cast<int>(std::min(a.n, j + 50));
       a.col_ind[j + 1] = a.col_ind[j] + right - left;
       for (int k = left; k < right; ++k) {
         double r = val_gen(rng);
@@ -120,7 +120,7 @@ class KulikARunPerfTestThreads : public ppc::util::BaseRunPerfTests<InType, OutT
     b.col_ind.assign(b.n + 1, 0);
     for (size_t j = 0; j < b.n; ++j) {
       int left = std::max(static_cast<int>(j - 50), 0);
-      int right = std::min(b.n, j + 50);
+      int right = static_cast<int>(std::min(b.n, j + 50));
       b.col_ind[j + 1] = b.col_ind[j] + right - left;
       for (int k = left; k < right; ++k) {
         double r = val_gen(rng);
