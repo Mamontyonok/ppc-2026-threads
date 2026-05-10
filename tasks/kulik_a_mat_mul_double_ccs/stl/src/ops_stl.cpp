@@ -2,7 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <numeric>
+#include <functional>
 #include <thread>
 #include <tuple>
 #include <vector>
@@ -105,7 +105,7 @@ bool KulikAMatMulDoubleCcsSTL::RunImpl() {
 
   const size_t num_threads_raw = std::thread::hardware_concurrency();
   const size_t num_threads = std::max<size_t>(1, num_threads_raw == 0 ? 1 : num_threads_raw);
-  const size_t threads_count = std::min(num_threads, b.m == 0 ? size_t(1) : b.m);
+  const size_t threads_count = std::min(num_threads, b.m == 0 ? static_cast<size_t>(1) : b.m);
 
   std::vector<std::thread> threads;
   threads.reserve(threads_count);
