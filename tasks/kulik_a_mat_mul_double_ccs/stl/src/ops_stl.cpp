@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <numeric>
 #include <tuple>
 #include <vector>
 
