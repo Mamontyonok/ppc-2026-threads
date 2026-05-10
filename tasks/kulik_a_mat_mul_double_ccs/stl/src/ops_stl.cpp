@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <numeric>
+#include <thread>
 #include <tuple>
 #include <vector>
 
@@ -53,6 +55,25 @@ inline void CopyColumn(size_t j, CCS &c, const std::vector<std::vector<double>> 
   }
 }
 
+void ProcessColumnsRange(size_t jstart, size_t jend, const CCS &a, const CCS &b,
+                         std::vector<std::vector<double>> &local_values, std::vector<std::vector<size_t>> &local_rows) {
+  std::vector<double> accum(a.n, 0.0);
+  std::vector<bool> nz_elem_rows(a.n, false);
+  std::vector<size_t> nnz_rows;
+  nnz_rows.reserve(a.n);
+
+  for (size_t j = jstart; j < jend; ++j) {
+    ProcessColumn(j, a, b, accum, nz_elem_rows, nnz_rows, local_values, local_rows);
+  }
+}
+
+void CopyColumnsRange(size_t jstart, size_t jend, CCS &c, const std::vector<std::vector<double>> &local_values,
+                      const std::vector<std::vector<size_t>> &local_rows) {
+  for (size_t j = jstart; j < jend; ++j) {
+    CopyColumn(j, c, local_values, local_rows);
+  }
+}
+
 }  // namespace
 
 KulikAMatMulDoubleCcsSTL::KulikAMatMulDoubleCcsSTL(const InType &in) {
@@ -82,13 +103,23 @@ bool KulikAMatMulDoubleCcsSTL::RunImpl() {
   std::vector<std::vector<double>> local_values(b.m);
   std::vector<std::vector<size_t>> local_rows(b.m);
 
-  std::vector<double> accum(a.n, 0.0);
-  std::vector<bool> nz_elem_rows(a.n, false);
-  std::vector<size_t> nnz_rows;
-  nnz_rows.reserve(a.n);
+  const size_t num_threads_raw = std::thread::hardware_concurrency();
+  const size_t num_threads = std::max<size_t>(1, num_threads_raw == 0 ? 1 : num_threads_raw);
+  const size_t threads_count = std::min(num_threads, b.m == 0 ? size_t(1) : b.m);
 
-  for (size_t j = 0; j < b.m; ++j) {
-    ProcessColumn(j, a, b, accum, nz_elem_rows, nnz_rows, local_values, local_rows);
+  std::vector<std::thread> threads;
+  threads.reserve(threads_count);
+
+  for (size_t tid = 0; tid < threads_count; ++tid) {
+    const size_t jstart = (tid * b.m) / threads_count;
+    const size_t jend = ((tid + 1) * b.m) / threads_count;
+
+    threads.emplace_back(ProcessColumnsRange, jstart, jend, std::cref(a), std::cref(b), std::ref(local_values),
+                         std::ref(local_rows));
+  }
+
+  for (auto &th : threads) {
+    th.join();
   }
 
   size_t total_nz = 0;
@@ -102,8 +133,16 @@ bool KulikAMatMulDoubleCcsSTL::RunImpl() {
   c.value.resize(total_nz);
   c.row.resize(total_nz);
 
-  for (size_t j = 0; j < b.m; ++j) {
-    CopyColumn(j, c, local_values, local_rows);
+  threads.clear();
+  for (size_t tid = 0; tid < threads_count; ++tid) {
+    const size_t jstart = (tid * b.m) / threads_count;
+    const size_t jend = ((tid + 1) * b.m) / threads_count;
+
+    threads.emplace_back(CopyColumnsRange, jstart, jend, std::ref(c), std::cref(local_values), std::cref(local_rows));
+  }
+
+  for (auto &th : threads) {
+    th.join();
   }
 
   return true;
