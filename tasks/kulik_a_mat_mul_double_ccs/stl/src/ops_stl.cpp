@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <execution>
 #include <numeric>
 #include <tuple>
 #include <vector>
@@ -84,21 +83,14 @@ bool KulikAMatMulDoubleCcsSTL::RunImpl() {
   std::vector<std::vector<double>> local_values(b.m);
   std::vector<std::vector<size_t>> local_rows(b.m);
 
-  std::vector<size_t> cols(b.m);
-  std::iota(cols.begin(), cols.end(), 0);
+  std::vector<double> accum(a.n, 0.0);
+  std::vector<bool> nz_elem_rows(a.n, false);
+  std::vector<size_t> nnz_rows;
+  nnz_rows.reserve(a.n);
 
-  std::for_each(std::execution::par, cols.begin(), cols.end(), [&](size_t j) {
-    thread_local std::vector<double> accum;
-    thread_local std::vector<bool> nz_elem_rows;
-    thread_local std::vector<size_t> nnz_rows;
-
-    if (accum.size() < a.n) {
-      accum.resize(a.n, 0.0);
-      nz_elem_rows.resize(a.n, false);
-    }
-
+  for (size_t j = 0; j < b.m; ++j) {
     ProcessColumn(j, a, b, accum, nz_elem_rows, nnz_rows, local_values, local_rows);
-  });
+  }
 
   size_t total_nz = 0;
   for (size_t j = 0; j < b.m; ++j) {
@@ -111,8 +103,9 @@ bool KulikAMatMulDoubleCcsSTL::RunImpl() {
   c.value.resize(total_nz);
   c.row.resize(total_nz);
 
-  std::for_each(std::execution::par, cols.begin(), cols.end(),
-                [&](size_t j) { CopyColumn(j, c, local_values, local_rows); });
+  for (size_t j = 0; j < b.m; ++j) {
+    CopyColumn(j, c, local_values, local_rows);
+  }
 
   return true;
 }
