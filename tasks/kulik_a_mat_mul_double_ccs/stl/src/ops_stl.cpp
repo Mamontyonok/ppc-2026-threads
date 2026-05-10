@@ -111,9 +111,8 @@ bool KulikAMatMulDoubleCcsSTL::RunImpl() {
   c.value.resize(total_nz);
   c.row.resize(total_nz);
 
-  std::for_each(std::execution::par, cols.begin(), cols.end(), [&](size_t j) {
-    CopyColumn(j, c, local_values, local_rows);
-  });
+  std::for_each(std::execution::par, cols.begin(), cols.end(),
+                [&](size_t j) { CopyColumn(j, c, local_values, local_rows); });
 
   return true;
 }
