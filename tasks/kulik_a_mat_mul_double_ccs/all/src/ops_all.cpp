@@ -1,18 +1,19 @@
 #include "kulik_a_mat_mul_double_ccs/all/include/ops_all.hpp"
 
 #include <mpi.h>
+#include <omp.h>
 
 #include <algorithm>
 #include <cstddef>
 #include <limits>
 #include <numeric>
 #include <stdexcept>
-#include <thread>
 #include <tuple>
 #include <utility>
 #include <vector>
 
 #include "kulik_a_mat_mul_double_ccs/common/include/common.hpp"
+#include "util/include/util.hpp"
 
 namespace kulik_a_mat_mul_double_ccs {
 
@@ -222,59 +223,42 @@ void ScatterB(const CCS &b, CCS &b_local, const std::vector<int> &col_starts, in
 }
 
 void GatherC(CCS &c, const CCS &c_local, const std::vector<int> &col_starts, int rank, int size) {
-  int local_cols = static_cast<int>(c_local.m);
-  int local_nnz = static_cast<int>(c_local.value.size());
-
-  std::vector<int> cols_counts;
-  std::vector<int> nnz_counts;
-
-  if (rank == 0) {
-    cols_counts.resize(static_cast<size_t>(size));
-    nnz_counts.resize(static_cast<size_t>(size));
-  }
-
-  MPI_Gather(&local_cols, 1, MPI_INT, rank == 0 ? cols_counts.data() : nullptr, 1, MPI_INT, 0, MPI_COMM_WORLD);
-  MPI_Gather(&local_nnz, 1, MPI_INT, rank == 0 ? nnz_counts.data() : nullptr, 1, MPI_INT, 0, MPI_COMM_WORLD);
-
-  if (rank == 0) {
-    c.m = col_starts.back();
-    c.n = c_local.n;
-    c.col_ind.assign(static_cast<size_t>(c.m) + 1, 0);
-
-    size_t total_nnz = 0;
-    for (int i = 0; i < size; ++i) {
-      total_nnz += static_cast<size_t>(nnz_counts[static_cast<size_t>(i)]);
-    }
-
-    c.row.resize(total_nnz);
-    c.value.resize(total_nnz);
-
-    size_t nnz_offset = 0;
-
-    auto place_block = [&](int proc, const CCS &src) {
-      const int start = col_starts[static_cast<size_t>(proc)];
-      const int cols = static_cast<int>(src.m);
-
-      for (int j = 0; j <= cols; ++j) {
-        c.col_ind[static_cast<size_t>(start + j)] = nnz_offset + src.col_ind[static_cast<size_t>(j)];
-      }
-
-      std::copy(src.row.begin(), src.row.end(), c.row.begin() + static_cast<std::ptrdiff_t>(nnz_offset));
-      std::copy(src.value.begin(), src.value.end(), c.value.begin() + static_cast<std::ptrdiff_t>(nnz_offset));
-
-      nnz_offset += src.value.size();
-    };
-
-    place_block(0, c_local);
-
-    for (int proc = 1; proc < size; ++proc) {
-      CCS tmp;
-      RecvCCS(tmp, proc);
-      place_block(proc, tmp);
-    }
-  } else {
+  if (rank != 0) {
     SendCCS(c_local, 0);
+    return;
   }
+
+  std::vector<CCS> parts(static_cast<size_t>(size));
+  parts[0] = c_local;
+
+  size_t total_nnz = c_local.value.size();
+  for (int proc = 1; proc < size; ++proc) {
+    RecvCCS(parts[static_cast<size_t>(proc)], proc);
+    total_nnz += parts[static_cast<size_t>(proc)].value.size();
+  }
+
+  c.m = col_starts.back();
+  c.n = c_local.n;
+  c.col_ind.assign(static_cast<size_t>(c.m) + 1, 0);
+  c.row.resize(total_nnz);
+  c.value.resize(total_nnz);
+
+  size_t nnz_offset = 0;
+  for (int proc = 0; proc < size; ++proc) {
+    const CCS &src = parts[static_cast<size_t>(proc)];
+    const int start = col_starts[static_cast<size_t>(proc)];
+    const size_t cols = src.m;
+
+    for (size_t j = 0; j <= cols; ++j) {
+      c.col_ind[static_cast<size_t>(start) + j] = nnz_offset + src.col_ind[j];
+    }
+
+    std::copy(src.row.begin(), src.row.end(), c.row.begin() + static_cast<std::ptrdiff_t>(nnz_offset));
+    std::copy(src.value.begin(), src.value.end(), c.value.begin() + static_cast<std::ptrdiff_t>(nnz_offset));
+    nnz_offset += src.value.size();
+  }
+
+  c.col_ind[static_cast<size_t>(c.m)] = total_nnz;
 }
 
 }  // namespace
@@ -344,33 +328,27 @@ bool KulikAMatMulDoubleCcsALL::RunImpl() {
   local_c.n = a.n;
   local_c.col_ind.assign(static_cast<size_t>(local_c.m) + 1, 0);
 
-  const int desired_threads_raw = static_cast<int>(std::thread::hardware_concurrency());
-  const int desired_threads = std::max(1, desired_threads_raw == 0 ? 1 : desired_threads_raw);
-  const int thread_count = std::max(1, std::min(desired_threads, std::max(1, static_cast<int>(local_b.m))));
+  const int omp_threads = std::max(1, ppc::util::GetNumThreads());
+  const int threads_count = std::max(1, std::min(omp_threads, std::max(1, static_cast<int>(local_b.m))));
 
   std::vector<size_t> thread_weights(static_cast<size_t>(local_b.m), 0);
   for (size_t j = 0; j < static_cast<size_t>(local_b.m); ++j) {
     thread_weights[j] = EstimateColumnCost(a, local_b, j);
   }
 
-  std::vector<int> thread_starts = BuildBalancedStarts(thread_weights, thread_count);
+  std::vector<int> thread_starts = BuildBalancedStarts(thread_weights, threads_count);
 
   std::vector<std::vector<double>> local_values(static_cast<size_t>(local_b.m));
   std::vector<std::vector<size_t>> local_rows(static_cast<size_t>(local_b.m));
 
-  std::vector<std::thread> threads;
-  threads.reserve(static_cast<size_t>(thread_count));
-
-  for (int tid = 0; tid < thread_count; ++tid) {
+#pragma omp parallel num_threads(threads_count) default(none) \
+    shared(a, local_b, local_values, local_rows, thread_starts)
+  {
+    const int tid = omp_get_thread_num();
     const size_t jstart = static_cast<size_t>(thread_starts[static_cast<size_t>(tid)]);
     const size_t jend = static_cast<size_t>(thread_starts[static_cast<size_t>(tid + 1)]);
 
-    threads.emplace_back(ProcessColumnsRange, jstart, jend, std::cref(a), std::cref(local_b), std::ref(local_values),
-                         std::ref(local_rows));
-  }
-
-  for (auto &th : threads) {
-    th.join();
+    ProcessColumnsRange(jstart, jend, a, local_b, local_values, local_rows);
   }
 
   size_t total_nz = 0;
@@ -382,6 +360,8 @@ bool KulikAMatMulDoubleCcsALL::RunImpl() {
   local_c.value.resize(total_nz);
   local_c.row.resize(total_nz);
 
+#pragma omp parallel for num_threads(threads_count) schedule(static) default(none) \
+    shared(local_b, local_c, local_values, local_rows)
   for (size_t j = 0; j < static_cast<size_t>(local_b.m); ++j) {
     CopyColumn(j, local_c, local_values, local_rows);
   }
