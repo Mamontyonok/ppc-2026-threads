@@ -24,8 +24,7 @@ class KulikARunPerfTestThreads : public ppc::util::BaseRunPerfTests<InType, OutT
     size_t size = 20000;
     CCS &a = std::get<0>(input_data_);
     CCS &b = std::get<1>(input_data_);
-    std::random_device rd;
-    std::mt19937 gen(rd());
+    std::mt19937 gen(42);
     std::uniform_real_distribution<double> dist_val(-10.0, 10.0);
     a.m = size;
     a.n = size;
