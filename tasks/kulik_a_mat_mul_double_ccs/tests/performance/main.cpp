@@ -7,6 +7,7 @@
 #include <tuple>
 #include <vector>
 
+#include "kulik_a_mat_mul_double_ccs/all/include/ops_all.hpp"
 #include "kulik_a_mat_mul_double_ccs/common/include/common.hpp"
 #include "kulik_a_mat_mul_double_ccs/omp/include/ops_omp.hpp"
 #include "kulik_a_mat_mul_double_ccs/seq/include/ops_seq.hpp"
@@ -119,7 +120,8 @@ namespace {
 
 const auto kAllPerfTasks =
     ppc::util::MakeAllPerfTasks<InType, KulikAMatMulDoubleCcsSEQ, KulikAMatMulDoubleCcsOMP, KulikAMatMulDoubleCcsTBB,
-                                KulikAMatMulDoubleCcsSTL>(PPC_SETTINGS_kulik_a_mat_mul_double_ccs);
+                                KulikAMatMulDoubleCcsSTL, KulikAMatMulDoubleCcsALL>(
+        PPC_SETTINGS_kulik_a_mat_mul_double_ccs);
 
 const auto kGtestValues = ppc::util::TupleToGTestValues(kAllPerfTasks);
 

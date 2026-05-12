@@ -1,0 +1,429 @@
+#include "kulik_a_mat_mul_double_ccs/all/include/ops_all.hpp"
+
+#include <mpi.h>
+
+#include <algorithm>
+#include <cstddef>
+#include <limits>
+#include <numeric>
+#include <stdexcept>
+#include <thread>
+#include <tuple>
+#include <utility>
+#include <vector>
+
+#include "kulik_a_mat_mul_double_ccs/common/include/common.hpp"
+
+namespace kulik_a_mat_mul_double_ccs {
+
+namespace {
+
+constexpr int TAG_MATRIX = 1001;
+
+inline int ToIntCount(size_t value) {
+  if (value > static_cast<size_t>(std::numeric_limits<int>::max())) {
+    throw std::runtime_error("MPI count overflow");
+  }
+  return static_cast<int>(value);
+}
+
+inline size_t EstimateColumnCost(const CCS &a, const CCS &b, size_t j) {
+  size_t cost = 0;
+  for (size_t k = b.col_ind[j]; k < b.col_ind[j + 1]; ++k) {
+    const size_t a_col = b.row[k];
+    cost += a.col_ind[a_col + 1] - a.col_ind[a_col];
+  }
+  return cost;
+}
+
+inline std::vector<int> BuildBalancedStarts(const std::vector<size_t> &weights, int parts) {
+  if (parts <= 0) {
+    parts = 1;
+  }
+
+  const int n = static_cast<int>(weights.size());
+  std::vector<int> starts(static_cast<size_t>(parts) + 1, 0);
+
+  if (n == 0) {
+    return starts;
+  }
+
+  std::vector<size_t> prefix(weights.size() + 1, 0);
+  for (size_t i = 0; i < weights.size(); ++i) {
+    prefix[i + 1] = prefix[i] + weights[i];
+  }
+
+  const size_t total = prefix.back();
+  int cur = 0;
+  starts[0] = 0;
+
+  for (int p = 1; p < parts; ++p) {
+    const size_t target = total * static_cast<size_t>(p) / static_cast<size_t>(parts);
+    while (cur < n && prefix[static_cast<size_t>(cur)] < target) {
+      ++cur;
+    }
+    starts[static_cast<size_t>(p)] = cur;
+  }
+
+  starts[static_cast<size_t>(parts)] = n;
+
+  for (int p = 1; p <= parts; ++p) {
+    if (starts[static_cast<size_t>(p)] < starts[static_cast<size_t>(p - 1)]) {
+      starts[static_cast<size_t>(p)] = starts[static_cast<size_t>(p - 1)];
+    }
+  }
+
+  return starts;
+}
+
+inline void ProcessColumn(size_t j, const CCS &a, const CCS &b, std::vector<double> &accum,
+                          std::vector<bool> &nz_elem_rows, std::vector<size_t> &nnz_rows,
+                          std::vector<std::vector<double>> &local_values,
+                          std::vector<std::vector<size_t>> &local_rows) {
+  for (size_t k = b.col_ind[j]; k < b.col_ind[j + 1]; ++k) {
+    const size_t ind = b.row[k];
+    const double b_val = b.value[k];
+    for (size_t zc = a.col_ind[ind]; zc < a.col_ind[ind + 1]; ++zc) {
+      const size_t i = a.row[zc];
+      const double a_val = a.value[zc];
+
+      accum[i] += a_val * b_val;
+      if (!nz_elem_rows[i]) {
+        nz_elem_rows[i] = true;
+        nnz_rows.push_back(i);
+      }
+    }
+  }
+
+  std::ranges::sort(nnz_rows);
+
+  for (size_t i : nnz_rows) {
+    if (accum[i] != 0.0) {
+      local_rows[j].push_back(i);
+      local_values[j].push_back(accum[i]);
+    }
+    accum[i] = 0.0;
+    nz_elem_rows[i] = false;
+  }
+  nnz_rows.clear();
+}
+
+inline void CopyColumn(size_t j, CCS &c, const std::vector<std::vector<double>> &local_values,
+                       const std::vector<std::vector<size_t>> &local_rows) {
+  const size_t offset = c.col_ind[j];
+  const size_t col_nz = local_values[j].size();
+  for (size_t k = 0; k < col_nz; ++k) {
+    c.value[offset + k] = local_values[j][k];
+    c.row[offset + k] = local_rows[j][k];
+  }
+}
+
+void ProcessColumnsRange(size_t jstart, size_t jend, const CCS &a, const CCS &b,
+                         std::vector<std::vector<double>> &local_values, std::vector<std::vector<size_t>> &local_rows) {
+  std::vector<double> accum(a.n, 0.0);
+  std::vector<bool> nz_elem_rows(a.n, false);
+  std::vector<size_t> nnz_rows;
+  nnz_rows.reserve(a.n);
+
+  for (size_t j = jstart; j < jend; ++j) {
+    ProcessColumn(j, a, b, accum, nz_elem_rows, nnz_rows, local_values, local_rows);
+  }
+}
+
+void BcastCCS(CCS &m, int root_rank = 0) {
+  int world_rank = 0;
+  MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
+
+  MPI_Bcast(&m.m, 1, MPI_INT, root_rank, MPI_COMM_WORLD);
+  MPI_Bcast(&m.n, 1, MPI_INT, root_rank, MPI_COMM_WORLD);
+
+  int nz = 0;
+  if (world_rank == root_rank) {
+    nz = static_cast<int>(m.value.size());
+  }
+  MPI_Bcast(&nz, 1, MPI_INT, root_rank, MPI_COMM_WORLD);
+
+  if (world_rank != root_rank) {
+    m.col_ind.resize(static_cast<size_t>(m.m) + 1);
+    m.row.resize(static_cast<size_t>(nz));
+    m.value.resize(static_cast<size_t>(nz));
+  }
+
+  MPI_Bcast(m.col_ind.data(), ToIntCount((static_cast<size_t>(m.m) + 1) * sizeof(size_t)), MPI_BYTE, root_rank,
+            MPI_COMM_WORLD);
+  MPI_Bcast(m.row.data(), ToIntCount(static_cast<size_t>(nz) * sizeof(size_t)), MPI_BYTE, root_rank, MPI_COMM_WORLD);
+  MPI_Bcast(m.value.data(), nz, MPI_DOUBLE, root_rank, MPI_COMM_WORLD);
+}
+
+void SendCCS(const CCS &m, int dest) {
+  MPI_Send(&m.m, 1, MPI_INT, dest, TAG_MATRIX, MPI_COMM_WORLD);
+  MPI_Send(&m.n, 1, MPI_INT, dest, TAG_MATRIX, MPI_COMM_WORLD);
+
+  const int nz = static_cast<int>(m.value.size());
+  MPI_Send(&nz, 1, MPI_INT, dest, TAG_MATRIX, MPI_COMM_WORLD);
+
+  MPI_Send(m.col_ind.data(), ToIntCount(m.col_ind.size() * sizeof(size_t)), MPI_BYTE, dest, TAG_MATRIX, MPI_COMM_WORLD);
+  MPI_Send(m.row.data(), ToIntCount(m.row.size() * sizeof(size_t)), MPI_BYTE, dest, TAG_MATRIX, MPI_COMM_WORLD);
+  MPI_Send(m.value.data(), nz, MPI_DOUBLE, dest, TAG_MATRIX, MPI_COMM_WORLD);
+}
+
+void RecvCCS(CCS &m, int src) {
+  MPI_Status st;
+
+  MPI_Recv(&m.m, 1, MPI_INT, src, TAG_MATRIX, MPI_COMM_WORLD, &st);
+  MPI_Recv(&m.n, 1, MPI_INT, src, TAG_MATRIX, MPI_COMM_WORLD, &st);
+
+  int nz = 0;
+  MPI_Recv(&nz, 1, MPI_INT, src, TAG_MATRIX, MPI_COMM_WORLD, &st);
+
+  m.col_ind.resize(static_cast<size_t>(m.m) + 1);
+  m.row.resize(static_cast<size_t>(nz));
+  m.value.resize(static_cast<size_t>(nz));
+
+  MPI_Recv(m.col_ind.data(), ToIntCount(m.col_ind.size() * sizeof(size_t)), MPI_BYTE, src, TAG_MATRIX, MPI_COMM_WORLD,
+           &st);
+  MPI_Recv(m.row.data(), ToIntCount(m.row.size() * sizeof(size_t)), MPI_BYTE, src, TAG_MATRIX, MPI_COMM_WORLD, &st);
+  MPI_Recv(m.value.data(), nz, MPI_DOUBLE, src, TAG_MATRIX, MPI_COMM_WORLD, &st);
+}
+
+void ScatterB(const CCS &b, CCS &b_local, const std::vector<int> &col_starts, int rank, int size) {
+  if (rank == 0) {
+    for (int proc = 0; proc < size; ++proc) {
+      const int jstart = col_starts[static_cast<size_t>(proc)];
+      const int jend = col_starts[static_cast<size_t>(proc + 1)];
+      const int local_cols = jend - jstart;
+
+      CCS tmp;
+      tmp.m = local_cols;
+      tmp.n = b.n;
+      tmp.col_ind.resize(static_cast<size_t>(local_cols) + 1);
+
+      const size_t nnz_start = b.col_ind[static_cast<size_t>(jstart)];
+      const size_t nnz_end = b.col_ind[static_cast<size_t>(jend)];
+
+      tmp.row.assign(b.row.begin() + static_cast<std::ptrdiff_t>(nnz_start),
+                     b.row.begin() + static_cast<std::ptrdiff_t>(nnz_end));
+      tmp.value.assign(b.value.begin() + static_cast<std::ptrdiff_t>(nnz_start),
+                       b.value.begin() + static_cast<std::ptrdiff_t>(nnz_end));
+
+      for (int j = 0; j <= local_cols; ++j) {
+        tmp.col_ind[static_cast<size_t>(j)] = b.col_ind[static_cast<size_t>(jstart + j)] - nnz_start;
+      }
+
+      if (proc == 0) {
+        b_local = std::move(tmp);
+      } else {
+        SendCCS(tmp, proc);
+      }
+    }
+  } else {
+    RecvCCS(b_local, 0);
+  }
+}
+
+void GatherC(CCS &c, const CCS &c_local, const std::vector<int> &col_starts, int rank, int size) {
+  int local_cols = static_cast<int>(c_local.m);
+  int local_nnz = static_cast<int>(c_local.value.size());
+
+  std::vector<int> cols_counts;
+  std::vector<int> nnz_counts;
+
+  if (rank == 0) {
+    cols_counts.resize(static_cast<size_t>(size));
+    nnz_counts.resize(static_cast<size_t>(size));
+  }
+
+  MPI_Gather(&local_cols, 1, MPI_INT, rank == 0 ? cols_counts.data() : nullptr, 1, MPI_INT, 0, MPI_COMM_WORLD);
+  MPI_Gather(&local_nnz, 1, MPI_INT, rank == 0 ? nnz_counts.data() : nullptr, 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+  if (rank == 0) {
+    c.m = col_starts.back();
+    c.n = c_local.n;
+    c.col_ind.assign(static_cast<size_t>(c.m) + 1, 0);
+
+    size_t total_nnz = 0;
+    for (int i = 0; i < size; ++i) {
+      total_nnz += static_cast<size_t>(nnz_counts[static_cast<size_t>(i)]);
+    }
+
+    c.row.resize(total_nnz);
+    c.value.resize(total_nnz);
+
+    size_t nnz_offset = 0;
+
+    auto place_block = [&](int proc, const CCS &src) {
+      const int start = col_starts[static_cast<size_t>(proc)];
+      const int cols = static_cast<int>(src.m);
+
+      for (int j = 0; j <= cols; ++j) {
+        c.col_ind[static_cast<size_t>(start + j)] = nnz_offset + src.col_ind[static_cast<size_t>(j)];
+      }
+
+      std::copy(src.row.begin(), src.row.end(), c.row.begin() + static_cast<std::ptrdiff_t>(nnz_offset));
+      std::copy(src.value.begin(), src.value.end(), c.value.begin() + static_cast<std::ptrdiff_t>(nnz_offset));
+
+      nnz_offset += src.value.size();
+    };
+
+    place_block(0, c_local);
+
+    for (int proc = 1; proc < size; ++proc) {
+      CCS tmp;
+      RecvCCS(tmp, proc);
+      place_block(proc, tmp);
+    }
+  } else {
+    SendCCS(c_local, 0);
+  }
+}
+
+}  // namespace
+
+KulikAMatMulDoubleCcsALL::KulikAMatMulDoubleCcsALL(const InType &in) {
+  SetTypeOfTask(GetStaticTypeOfTask());
+
+  int world_rank = 0;
+  MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
+
+  if (world_rank == 0) {
+    GetInput() = in;
+    GetOutput() = CCS();
+  } else {
+    GetInput() = std::make_tuple(CCS(), CCS());
+    GetOutput() = CCS();
+  }
+}
+
+bool KulikAMatMulDoubleCcsALL::ValidationImpl() {
+  int world_rank = 0;
+  MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
+
+  if (world_rank == 0) {
+    const auto &a = std::get<0>(GetInput());
+    const auto &b = std::get<1>(GetInput());
+    return (a.m == b.n);
+  }
+
+  return true;
+}
+
+bool KulikAMatMulDoubleCcsALL::PreProcessingImpl() {
+  return true;
+}
+
+bool KulikAMatMulDoubleCcsALL::RunImpl() {
+  int world_rank = 0;
+  int world_size = 0;
+  MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
+  MPI_Comm_size(MPI_COMM_WORLD, &world_size);
+
+  auto &a = std::get<0>(GetInput());
+  auto &b = std::get<1>(GetInput());
+  OutType &c = GetOutput();
+
+  std::vector<int> col_starts;
+  if (world_rank == 0) {
+    std::vector<size_t> weights(static_cast<size_t>(b.m), 0);
+    for (size_t j = 0; j < static_cast<size_t>(b.m); ++j) {
+      weights[j] = EstimateColumnCost(a, b, j);
+    }
+    col_starts = BuildBalancedStarts(weights, world_size);
+  } else {
+    col_starts.resize(static_cast<size_t>(world_size) + 1, 0);
+  }
+
+  MPI_Bcast(col_starts.data(), world_size + 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+  BcastCCS(a);
+
+  CCS local_b;
+  ScatterB(b, local_b, col_starts, world_rank, world_size);
+
+  CCS local_c;
+  local_c.m = local_b.m;
+  local_c.n = a.n;
+  local_c.col_ind.assign(static_cast<size_t>(local_c.m) + 1, 0);
+
+  const int desired_threads_raw = static_cast<int>(std::thread::hardware_concurrency());
+  const int desired_threads = std::max(1, desired_threads_raw == 0 ? 1 : desired_threads_raw);
+  const int thread_count = std::max(1, std::min(desired_threads, std::max(1, static_cast<int>(local_b.m))));
+
+  std::vector<size_t> thread_weights(static_cast<size_t>(local_b.m), 0);
+  for (size_t j = 0; j < static_cast<size_t>(local_b.m); ++j) {
+    thread_weights[j] = EstimateColumnCost(a, local_b, j);
+  }
+
+  std::vector<int> thread_starts = BuildBalancedStarts(thread_weights, thread_count);
+
+  std::vector<std::vector<double>> local_values(static_cast<size_t>(local_b.m));
+  std::vector<std::vector<size_t>> local_rows(static_cast<size_t>(local_b.m));
+
+  std::vector<std::thread> threads;
+  threads.reserve(static_cast<size_t>(thread_count));
+
+  for (int tid = 0; tid < thread_count; ++tid) {
+    const size_t jstart = static_cast<size_t>(thread_starts[static_cast<size_t>(tid)]);
+    const size_t jend = static_cast<size_t>(thread_starts[static_cast<size_t>(tid + 1)]);
+
+    threads.emplace_back(ProcessColumnsRange, jstart, jend, std::cref(a), std::cref(local_b), std::ref(local_values),
+                         std::ref(local_rows));
+  }
+
+  for (auto &th : threads) {
+    th.join();
+  }
+
+  size_t total_nz = 0;
+  for (size_t j = 0; j < static_cast<size_t>(local_b.m); ++j) {
+    local_c.col_ind[j] = total_nz;
+    total_nz += local_values[j].size();
+  }
+  local_c.col_ind[static_cast<size_t>(local_b.m)] = total_nz;
+  local_c.value.resize(total_nz);
+  local_c.row.resize(total_nz);
+
+  for (size_t j = 0; j < static_cast<size_t>(local_b.m); ++j) {
+    CopyColumn(j, local_c, local_values, local_rows);
+  }
+
+  GatherC(c, local_c, col_starts, world_rank, world_size);
+
+  return true;
+}
+
+bool KulikAMatMulDoubleCcsALL::PostProcessingImpl() {
+  int world_rank = 0;
+  MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
+
+  OutType &c = GetOutput();
+
+  int m = 0;
+  int n = 0;
+  int nz = 0;
+
+  if (world_rank == 0) {
+    m = c.m;
+    n = c.n;
+    nz = static_cast<int>(c.value.size());
+  }
+
+  MPI_Bcast(&m, 1, MPI_INT, 0, MPI_COMM_WORLD);
+  MPI_Bcast(&n, 1, MPI_INT, 0, MPI_COMM_WORLD);
+  MPI_Bcast(&nz, 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+  if (world_rank != 0) {
+    c.m = m;
+    c.n = n;
+    c.col_ind.resize(static_cast<size_t>(m) + 1);
+    c.row.resize(static_cast<size_t>(nz));
+    c.value.resize(static_cast<size_t>(nz));
+  }
+
+  MPI_Bcast(c.col_ind.data(), ToIntCount((static_cast<size_t>(m) + 1) * sizeof(size_t)), MPI_BYTE, 0, MPI_COMM_WORLD);
+  MPI_Bcast(c.row.data(), ToIntCount(static_cast<size_t>(nz) * sizeof(size_t)), MPI_BYTE, 0, MPI_COMM_WORLD);
+  MPI_Bcast(c.value.data(), nz, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+
+  return true;
+}
+
+}  // namespace kulik_a_mat_mul_double_ccs
