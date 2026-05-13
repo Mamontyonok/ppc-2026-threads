@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <limits>
-#include <numeric>
 #include <stdexcept>
 #include <tuple>
 #include <utility>
@@ -19,7 +18,7 @@ namespace kulik_a_mat_mul_double_ccs {
 
 namespace {
 
-constexpr int TAG_MATRIX = 1001;
+constexpr int kTagMatrix = 1001;
 
 inline int ToIntCount(size_t value) {
   if (value > static_cast<size_t>(std::numeric_limits<int>::max())) {
@@ -58,20 +57,18 @@ inline std::vector<int> BuildBalancedStarts(const std::vector<size_t> &weights, 
   int cur = 0;
   starts[0] = 0;
 
-  for (int p = 1; p < parts; ++p) {
-    const size_t target = total * static_cast<size_t>(p) / static_cast<size_t>(parts);
+  for (int part = 1; part < parts; ++part) {
+    const size_t target = total * static_cast<size_t>(part) / static_cast<size_t>(parts);
     while (cur < n && prefix[static_cast<size_t>(cur)] < target) {
       ++cur;
     }
-    starts[static_cast<size_t>(p)] = cur;
+    starts[static_cast<size_t>(part)] = cur;
   }
 
   starts[static_cast<size_t>(parts)] = n;
 
-  for (int p = 1; p <= parts; ++p) {
-    if (starts[static_cast<size_t>(p)] < starts[static_cast<size_t>(p - 1)]) {
-      starts[static_cast<size_t>(p)] = starts[static_cast<size_t>(p - 1)];
-    }
+  for (int part = 1; part <= parts; ++part) {
+    starts[part] = std::max(starts[part], starts[part - 1]);
   }
 
   return starts;
@@ -157,41 +154,41 @@ void BcastCCS(CCS &m, int root_rank = 0) {
 }
 
 void SendCCS(const CCS &m, int dest) {
-  MPI_Send(&m.m, 1, MPI_INT, dest, TAG_MATRIX, MPI_COMM_WORLD);
-  MPI_Send(&m.n, 1, MPI_INT, dest, TAG_MATRIX, MPI_COMM_WORLD);
+  MPI_Send(&m.m, 1, MPI_INT, dest, kTagMatrix, MPI_COMM_WORLD);
+  MPI_Send(&m.n, 1, MPI_INT, dest, kTagMatrix, MPI_COMM_WORLD);
 
   const int nz = static_cast<int>(m.value.size());
-  MPI_Send(&nz, 1, MPI_INT, dest, TAG_MATRIX, MPI_COMM_WORLD);
+  MPI_Send(&nz, 1, MPI_INT, dest, kTagMatrix, MPI_COMM_WORLD);
 
-  MPI_Send(m.col_ind.data(), ToIntCount(m.col_ind.size() * sizeof(size_t)), MPI_BYTE, dest, TAG_MATRIX, MPI_COMM_WORLD);
-  MPI_Send(m.row.data(), ToIntCount(m.row.size() * sizeof(size_t)), MPI_BYTE, dest, TAG_MATRIX, MPI_COMM_WORLD);
-  MPI_Send(m.value.data(), nz, MPI_DOUBLE, dest, TAG_MATRIX, MPI_COMM_WORLD);
+  MPI_Send(m.col_ind.data(), ToIntCount(m.col_ind.size() * sizeof(size_t)), MPI_BYTE, dest, kTagMatrix, MPI_COMM_WORLD);
+  MPI_Send(m.row.data(), ToIntCount(m.row.size() * sizeof(size_t)), MPI_BYTE, dest, kTagMatrix, MPI_COMM_WORLD);
+  MPI_Send(m.value.data(), nz, MPI_DOUBLE, dest, kTagMatrix, MPI_COMM_WORLD);
 }
 
 void RecvCCS(CCS &m, int src) {
   MPI_Status st;
 
-  MPI_Recv(&m.m, 1, MPI_INT, src, TAG_MATRIX, MPI_COMM_WORLD, &st);
-  MPI_Recv(&m.n, 1, MPI_INT, src, TAG_MATRIX, MPI_COMM_WORLD, &st);
+  MPI_Recv(&m.m, 1, MPI_INT, src, kTagMatrix, MPI_COMM_WORLD, &st);
+  MPI_Recv(&m.n, 1, MPI_INT, src, kTagMatrix, MPI_COMM_WORLD, &st);
 
   int nz = 0;
-  MPI_Recv(&nz, 1, MPI_INT, src, TAG_MATRIX, MPI_COMM_WORLD, &st);
+  MPI_Recv(&nz, 1, MPI_INT, src, kTagMatrix, MPI_COMM_WORLD, &st);
 
   m.col_ind.resize(static_cast<size_t>(m.m) + 1);
   m.row.resize(static_cast<size_t>(nz));
   m.value.resize(static_cast<size_t>(nz));
 
-  MPI_Recv(m.col_ind.data(), ToIntCount(m.col_ind.size() * sizeof(size_t)), MPI_BYTE, src, TAG_MATRIX, MPI_COMM_WORLD,
+  MPI_Recv(m.col_ind.data(), ToIntCount(m.col_ind.size() * sizeof(size_t)), MPI_BYTE, src, kTagMatrix, MPI_COMM_WORLD,
            &st);
-  MPI_Recv(m.row.data(), ToIntCount(m.row.size() * sizeof(size_t)), MPI_BYTE, src, TAG_MATRIX, MPI_COMM_WORLD, &st);
-  MPI_Recv(m.value.data(), nz, MPI_DOUBLE, src, TAG_MATRIX, MPI_COMM_WORLD, &st);
+  MPI_Recv(m.row.data(), ToIntCount(m.row.size() * sizeof(size_t)), MPI_BYTE, src, kTagMatrix, MPI_COMM_WORLD, &st);
+  MPI_Recv(m.value.data(), nz, MPI_DOUBLE, src, kTagMatrix, MPI_COMM_WORLD, &st);
 }
 
 void ScatterB(const CCS &b, CCS &b_local, const std::vector<int> &col_starts, int rank, int size) {
   if (rank == 0) {
     for (int proc = 0; proc < size; ++proc) {
       const int jstart = col_starts[static_cast<size_t>(proc)];
-      const int jend = col_starts[static_cast<size_t>(proc + 1)];
+      const int jend = col_starts[static_cast<size_t>(proc) + 1];
       const int local_cols = jend - jstart;
 
       CCS tmp;
@@ -208,11 +205,12 @@ void ScatterB(const CCS &b, CCS &b_local, const std::vector<int> &col_starts, in
                        b.value.begin() + static_cast<std::ptrdiff_t>(nnz_end));
 
       for (int j = 0; j <= local_cols; ++j) {
-        tmp.col_ind[static_cast<size_t>(j)] = b.col_ind[static_cast<size_t>(jstart + j)] - nnz_start;
+        tmp.col_ind[static_cast<size_t>(j)] =
+            b.col_ind[static_cast<size_t>(jstart) + static_cast<size_t>(j)] - nnz_start;
       }
 
       if (proc == 0) {
-        b_local = std::move(tmp);
+        b_local = tmp;
       } else {
         SendCCS(tmp, proc);
       }
@@ -253,8 +251,8 @@ void GatherC(CCS &c, const CCS &c_local, const std::vector<int> &col_starts, int
       c.col_ind[static_cast<size_t>(start) + j] = nnz_offset + src.col_ind[j];
     }
 
-    std::copy(src.row.begin(), src.row.end(), c.row.begin() + static_cast<std::ptrdiff_t>(nnz_offset));
-    std::copy(src.value.begin(), src.value.end(), c.value.begin() + static_cast<std::ptrdiff_t>(nnz_offset));
+    std::ranges::copy(src.row, c.row.begin() + static_cast<std::ptrdiff_t>(nnz_offset));
+    std::ranges::copy(src.value, c.value.begin() + static_cast<std::ptrdiff_t>(nnz_offset));
     nnz_offset += src.value.size();
   }
 
@@ -345,8 +343,8 @@ bool KulikAMatMulDoubleCcsALL::RunImpl() {
     shared(a, local_b, local_values, local_rows, thread_starts)
   {
     const int tid = omp_get_thread_num();
-    const size_t jstart = static_cast<size_t>(thread_starts[static_cast<size_t>(tid)]);
-    const size_t jend = static_cast<size_t>(thread_starts[static_cast<size_t>(tid + 1)]);
+    const auto jstart = static_cast<size_t>(thread_starts[static_cast<size_t>(tid)]);
+    const auto jend = static_cast<size_t>(thread_starts[static_cast<size_t>(tid) + 1]);
 
     ProcessColumnsRange(jstart, jend, a, local_b, local_values, local_rows);
   }
@@ -382,8 +380,8 @@ bool KulikAMatMulDoubleCcsALL::PostProcessingImpl() {
   int nz = 0;
 
   if (world_rank == 0) {
-    m = c.m;
-    n = c.n;
+    m = static_cast<int>(c.m);
+    n = static_cast<int>(c.n);
     nz = static_cast<int>(c.value.size());
   }
 
