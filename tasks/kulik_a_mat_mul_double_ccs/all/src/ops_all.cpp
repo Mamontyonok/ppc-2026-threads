@@ -8,7 +8,6 @@
 #include <limits>
 #include <stdexcept>
 #include <tuple>
-#include <utility>
 #include <vector>
 
 #include "kulik_a_mat_mul_double_ccs/common/include/common.hpp"
