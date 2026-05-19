@@ -64,7 +64,7 @@ bool KulikAMatMulDoubleCcsOMP::RunImpl() {
   const auto &a = std::get<0>(GetInput());
   const auto &b = std::get<1>(GetInput());
   OutType &c = GetOutput();
-  
+
   c.n = a.n;
   c.m = b.m;
   c.col_ind.assign(c.m + 1, 0);
