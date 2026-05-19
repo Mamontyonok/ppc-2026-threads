@@ -1,8 +1,5 @@
 #pragma once
 
-#include <cstddef>
-#include <vector>
-
 #include "kulik_a_mat_mul_double_ccs/common/include/common.hpp"
 #include "task/include/task.hpp"
 

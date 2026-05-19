@@ -2,8 +2,9 @@
 
 #include <omp.h>
 
-#include <climits>
+#include <algorithm>
 #include <cstddef>
+#include <limits>
 #include <tuple>
 #include <vector>
 
@@ -13,9 +14,9 @@ namespace kulik_a_mat_mul_double_ccs {
 
 namespace {
 
-inline void ProcessColumn(size_t j, const CCS &a, const CCS &b, double *accum, std::vector<double> &out_vals,
+static void ProcessColumn(size_t j, const CCS &a, const CCS &b, double *accum, std::vector<double> &out_vals,
                           std::vector<size_t> &out_rows) {
-  size_t row_min = SIZE_MAX;
+  size_t row_min = std::numeric_limits<size_t>::max();
   size_t row_max = 0;
 
   for (size_t k = b.col_ind[j]; k < b.col_ind[j + 1]; ++k) {
@@ -24,12 +25,8 @@ inline void ProcessColumn(size_t j, const CCS &a, const CCS &b, double *accum, s
     for (size_t zc = a.col_ind[ind]; zc < a.col_ind[ind + 1]; ++zc) {
       const size_t i = a.row[zc];
       accum[i] += a.value[zc] * b_val;
-      if (i < row_min) {
-        row_min = i;
-      }
-      if (i > row_max) {
-        row_max = i;
-      }
+      row_min = std::min(row_min, i);
+      row_max = std::max(row_max, i);
     }
   }
 
@@ -67,7 +64,7 @@ bool KulikAMatMulDoubleCcsOMP::RunImpl() {
   const auto &a = std::get<0>(GetInput());
   const auto &b = std::get<1>(GetInput());
   OutType &c = GetOutput();
-
+  
   c.n = a.n;
   c.m = b.m;
   c.col_ind.assign(c.m + 1, 0);
