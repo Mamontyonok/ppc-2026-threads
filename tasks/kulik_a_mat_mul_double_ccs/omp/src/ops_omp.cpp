@@ -14,7 +14,8 @@ namespace kulik_a_mat_mul_double_ccs {
 
 namespace {
 
-inline void Symbolic(size_t j, const CCS &a, const CCS &b, std::vector<size_t> &was, std::vector<size_t> &col_nnz) {
+inline void mat_mult_phase1(size_t j, const CCS &a, const CCS &b, std::vector<size_t> &was,
+                            std::vector<size_t> &col_nnz) {
   size_t count = 0;
   for (size_t k = b.col_ind[j]; k < b.col_ind[j + 1]; ++k) {
     const size_t b_row = b.row[k];
@@ -29,8 +30,8 @@ inline void Symbolic(size_t j, const CCS &a, const CCS &b, std::vector<size_t> &
   col_nnz[j] = count;
 }
 
-inline void Numeric(size_t j, const CCS &a, const CCS &b, CCS &c, size_t stamp, std::vector<size_t> &was,
-                    std::vector<double> &accum, std::vector<size_t> &rows) {
+inline void mat_mult_phase2(size_t j, const CCS &a, const CCS &b, CCS &c, size_t stamp, std::vector<size_t> &was,
+                            std::vector<double> &accum, std::vector<size_t> &rows) {
   rows.clear();
   for (size_t k = b.col_ind[j]; k < b.col_ind[j + 1]; ++k) {
     const double b_val = b.value[k];
@@ -86,7 +87,7 @@ bool KulikAMatMulDoubleCcsOMP::RunImpl() {
     std::vector<size_t> was(a.n, std::numeric_limits<size_t>::max());
 #pragma omp for schedule(static)
     for (size_t j = 0; j < b.m; ++j) {
-      Symbolic(j, a, b, was, col_nnz);
+      mat_mult_phase1(j, a, b, was, col_nnz);
     }
   }
 
@@ -107,7 +108,7 @@ bool KulikAMatMulDoubleCcsOMP::RunImpl() {
     std::vector<size_t> rows;
 #pragma omp for schedule(static)
     for (size_t j = 0; j < b.m; ++j) {
-      Numeric(j, a, b, c, b.m + j, was, accum, rows);
+      mat_mult_phase2(j, a, b, c, b.m + j, was, accum, rows);
     }
   }
 
