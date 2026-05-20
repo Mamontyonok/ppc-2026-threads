@@ -64,7 +64,8 @@ inline std::vector<int> BuildBalancedStarts(const std::vector<size_t> &weights, 
   return starts;
 }
 
-inline void MatMultPhase1(size_t j, const CCS &a, const CCS &b, std::vector<size_t> &was, std::vector<size_t> &col_nnz) {
+inline void MatMultPhase1(size_t j, const CCS &a, const CCS &b, std::vector<size_t> &was,
+                          std::vector<size_t> &col_nnz) {
   size_t count = 0;
   for (size_t k = b.col_ind[j]; k < b.col_ind[j + 1]; ++k) {
     const size_t b_row = b.row[k];
@@ -80,7 +81,7 @@ inline void MatMultPhase1(size_t j, const CCS &a, const CCS &b, std::vector<size
 }
 
 inline void MatMultPhase2(size_t j, const CCS &a, const CCS &b, CCS &c, size_t stamp, std::vector<size_t> &was,
-                    std::vector<double> &accum, std::vector<size_t> &rows) {
+                          std::vector<double> &accum, std::vector<size_t> &rows) {
   rows.clear();
   for (size_t k = b.col_ind[j]; k < b.col_ind[j + 1]; ++k) {
     const double b_val = b.value[k];
