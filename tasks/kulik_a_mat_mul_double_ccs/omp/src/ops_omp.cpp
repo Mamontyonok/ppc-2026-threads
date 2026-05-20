@@ -4,11 +4,11 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <limits>
 #include <tuple>
 #include <vector>
 
 #include "kulik_a_mat_mul_double_ccs/common/include/common.hpp"
-#include "util/include/util.hpp"
 
 namespace kulik_a_mat_mul_double_ccs {
 
@@ -71,7 +71,7 @@ bool KulikAMatMulDoubleCcsOMP::RunImpl() {
   c.m = b.m;
   c.col_ind.assign(c.m + 1, 0);
 
-  const int num_threads = ppc::util::GetNumThreads();
+  const int num_threads = omp_get_max_threads();
 
   std::vector<std::vector<double>> thread_accum(num_threads, std::vector<double>(a.n, 0.0));
   std::vector<std::vector<bool>> thread_nz(num_threads, std::vector<bool>(a.n, false));
@@ -79,14 +79,20 @@ bool KulikAMatMulDoubleCcsOMP::RunImpl() {
 
   std::vector<std::vector<double>> flat_vals(num_threads);
   std::vector<std::vector<size_t>> flat_rows(num_threads);
-
   std::vector<size_t> col_nnz(b.m, 0);
 
+  std::vector<size_t> thread_jstart(num_threads, std::numeric_limits<size_t>::max());
+  std::vector<size_t> thread_jend(num_threads, 0);
+
 #pragma omp parallel for default(none) schedule(static) \
-    shared(a, b, thread_accum, thread_nz, thread_nnz_rows, flat_vals, flat_rows, col_nnz)
+    shared(a, b, thread_accum, thread_nz, thread_nnz_rows, flat_vals, flat_rows, col_nnz, thread_jstart, thread_jend)
   for (size_t j = 0; j < b.m; ++j) {
     int tid = omp_get_thread_num();
+    if (thread_jstart[tid] == std::numeric_limits<size_t>::max()) {
+      thread_jstart[tid] = j;
+    }
     ProcessColumn(j, tid, a, b, thread_accum, thread_nz, thread_nnz_rows, flat_vals, flat_rows, col_nnz);
+    thread_jend[tid] = j + 1;
   }
 
   size_t total_nz = 0;
@@ -100,13 +106,11 @@ bool KulikAMatMulDoubleCcsOMP::RunImpl() {
   c.value.resize(total_nz);
   c.row.resize(total_nz);
 
-#pragma omp parallel for default(none) schedule(static) shared(b, c, col_nnz, flat_vals, flat_rows)
+#pragma omp parallel for default(none) schedule(static) \
+    shared(c, col_nnz, flat_vals, flat_rows, thread_jstart, thread_jend)
   for (int tid = 0; tid < omp_get_max_threads(); ++tid) {
     size_t read = 0;
-    const size_t threads_count = static_cast<size_t>(ppc::util::GetNumThreads());
-    const size_t jstart = (static_cast<size_t>(tid) * b.m) / threads_count;
-    const size_t jend = (static_cast<size_t>(tid + 1) * b.m) / threads_count;
-    for (size_t j = jstart; j < jend; ++j) {
+    for (size_t j = thread_jstart[tid]; j < thread_jend[tid]; ++j) {
       const size_t write = c.col_ind[j];
       const size_t cnt = col_nnz[j];
       for (size_t k = 0; k < cnt; ++k) {
