@@ -299,7 +299,8 @@ bool KulikAMatMulDoubleCcsALL::RunImpl() {
 
   std::vector<size_t> col_nnz(local_cols, 0);
 
-#pragma omp parallel num_threads(std::max(1, ppc::util::GetNumThreads())) default(none) shared(a, local_b, col_nnz, local_cols)
+#pragma omp parallel num_threads(std::max(1, ppc::util::GetNumThreads())) default(none) \
+    shared(a, local_b, col_nnz, local_cols)
   {
     std::vector<size_t> marker(static_cast<size_t>(a.n), std::numeric_limits<size_t>::max());
 #pragma omp for schedule(static)
@@ -318,7 +319,8 @@ bool KulikAMatMulDoubleCcsALL::RunImpl() {
   local_c.value.resize(total_nz);
   local_c.row.resize(total_nz);
 
-#pragma omp parallel num_threads(std::max(1, ppc::util::GetNumThreads())) default(none) shared(a, local_b, local_c, local_cols)
+#pragma omp parallel num_threads(std::max(1, ppc::util::GetNumThreads())) default(none) \
+    shared(a, local_b, local_c, local_cols)
   {
     std::vector<size_t> marker(static_cast<size_t>(a.n), std::numeric_limits<size_t>::max());
     std::vector<double> acc(static_cast<size_t>(a.n), 0.0);
