@@ -12,41 +12,49 @@
 
 namespace kulik_a_mat_mul_double_ccs {
 
-void KulikAMatMulDoubleCcsOMP::ProcessColumn(size_t j, int tid, const CCS &a, const CCS &b,
-                                             std::vector<std::vector<double>> &thread_accum,
-                                             std::vector<std::vector<bool>> &thread_nz,
-                                             std::vector<std::vector<size_t>> &thread_nnz_rows,
-                                             std::vector<std::vector<double>> &flat_vals,
-                                             std::vector<std::vector<size_t>> &flat_rows,
-                                             std::vector<size_t> &col_nnz) {
+namespace {
+
+inline void Symbolic(size_t j, const CCS &a, const CCS &b, std::vector<size_t> &marker, std::vector<size_t> &col_nnz) {
+  size_t count = 0;
   for (size_t k = b.col_ind[j]; k < b.col_ind[j + 1]; ++k) {
-    size_t ind = b.row[k];
-    double b_val = b.value[k];
-    for (size_t zc = a.col_ind[ind]; zc < a.col_ind[ind + 1]; ++zc) {
-      size_t i = a.row[zc];
-      thread_accum[tid][i] += a.value[zc] * b_val;
-      if (!thread_nz[tid][i]) {
-        thread_nz[tid][i] = true;
-        thread_nnz_rows[tid].push_back(i);
+    const size_t b_row = b.row[k];
+    for (size_t zp = a.col_ind[b_row]; zp < a.col_ind[b_row + 1]; ++zp) {
+      const size_t a_row = a.row[zp];
+      if (marker[a_row] != j) {
+        marker[a_row] = j;
+        ++count;
       }
     }
   }
-
-  std::ranges::sort(thread_nnz_rows[tid]);
-
-  size_t cnt = 0;
-  for (size_t i : thread_nnz_rows[tid]) {
-    if (thread_accum[tid][i] != 0.0) {
-      flat_rows[tid].push_back(i);
-      flat_vals[tid].push_back(thread_accum[tid][i]);
-      ++cnt;
-    }
-    thread_accum[tid][i] = 0.0;
-    thread_nz[tid][i] = false;
-  }
-  thread_nnz_rows[tid].clear();
-  col_nnz[j] = cnt;
+  col_nnz[j] = count;
 }
+
+inline void Numeric(size_t j, const CCS &a, const CCS &b, CCS &c, size_t stamp, std::vector<size_t> &marker,
+                    std::vector<double> &acc, std::vector<size_t> &rows) {
+  rows.clear();
+  for (size_t k = b.col_ind[j]; k < b.col_ind[j + 1]; ++k) {
+    const double b_val = b.value[k];
+    const size_t b_row = b.row[k];
+    for (size_t zp = a.col_ind[b_row]; zp < a.col_ind[b_row + 1]; ++zp) {
+      const size_t a_row = a.row[zp];
+      acc[a_row] += a.value[zp] * b_val;
+      if (marker[a_row] != stamp) {
+        marker[a_row] = stamp;
+        rows.push_back(a_row);
+      }
+    }
+  }
+  std::ranges::sort(rows);
+  size_t write = c.col_ind[j];
+  for (const size_t i : rows) {
+    c.row[write] = i;
+    c.value[write] = acc[i];
+    acc[i] = 0.0;
+    ++write;
+  }
+}
+
+}  // namespace
 
 KulikAMatMulDoubleCcsOMP::KulikAMatMulDoubleCcsOMP(const InType &in) {
   SetTypeOfTask(GetStaticTypeOfTask());
@@ -71,28 +79,15 @@ bool KulikAMatMulDoubleCcsOMP::RunImpl() {
   c.m = b.m;
   c.col_ind.assign(c.m + 1, 0);
 
-  const int num_threads = omp_get_max_threads();
-
-  std::vector<std::vector<double>> thread_accum(num_threads, std::vector<double>(a.n, 0.0));
-  std::vector<std::vector<bool>> thread_nz(num_threads, std::vector<bool>(a.n, false));
-  std::vector<std::vector<size_t>> thread_nnz_rows(num_threads);
-
-  std::vector<std::vector<double>> flat_vals(num_threads);
-  std::vector<std::vector<size_t>> flat_rows(num_threads);
   std::vector<size_t> col_nnz(b.m, 0);
 
-  std::vector<size_t> thread_jstart(num_threads, std::numeric_limits<size_t>::max());
-  std::vector<size_t> thread_jend(num_threads, 0);
-
-#pragma omp parallel for default(none) schedule(static) \
-    shared(a, b, thread_accum, thread_nz, thread_nnz_rows, flat_vals, flat_rows, col_nnz, thread_jstart, thread_jend)
-  for (size_t j = 0; j < b.m; ++j) {
-    int tid = omp_get_thread_num();
-    if (thread_jstart[tid] == std::numeric_limits<size_t>::max()) {
-      thread_jstart[tid] = j;
+#pragma omp parallel default(none) shared(a, b, col_nnz)
+  {
+    std::vector<size_t> marker(a.n, std::numeric_limits<size_t>::max());
+#pragma omp for schedule(static)
+    for (size_t j = 0; j < b.m; ++j) {
+      Symbolic(j, a, b, marker, col_nnz);
     }
-    ProcessColumn(j, tid, a, b, thread_accum, thread_nz, thread_nnz_rows, flat_vals, flat_rows, col_nnz);
-    thread_jend[tid] = j + 1;
   }
 
   size_t total_nz = 0;
@@ -102,22 +97,17 @@ bool KulikAMatMulDoubleCcsOMP::RunImpl() {
   }
   c.col_ind[b.m] = total_nz;
   c.nz = total_nz;
-
   c.value.resize(total_nz);
   c.row.resize(total_nz);
 
-#pragma omp parallel for default(none) schedule(static) \
-    shared(c, col_nnz, flat_vals, flat_rows, thread_jstart, thread_jend)
-  for (int tid = 0; tid < omp_get_max_threads(); ++tid) {
-    size_t read = 0;
-    for (size_t j = thread_jstart[tid]; j < thread_jend[tid]; ++j) {
-      const size_t write = c.col_ind[j];
-      const size_t cnt = col_nnz[j];
-      for (size_t k = 0; k < cnt; ++k) {
-        c.value[write + k] = flat_vals[tid][read + k];
-        c.row[write + k] = flat_rows[tid][read + k];
-      }
-      read += cnt;
+#pragma omp parallel default(none) shared(a, b, c)
+  {
+    std::vector<size_t> marker(a.n, std::numeric_limits<size_t>::max());
+    std::vector<double> acc(a.n, 0.0);
+    std::vector<size_t> rows;
+#pragma omp for schedule(static)
+    for (size_t j = 0; j < b.m; ++j) {
+      Numeric(j, a, b, c, b.m + j, marker, acc, rows);
     }
   }
 
