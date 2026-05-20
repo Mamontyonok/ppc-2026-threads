@@ -14,14 +14,14 @@ namespace kulik_a_mat_mul_double_ccs {
 
 namespace {
 
-inline void Symbolic(size_t j, const CCS &a, const CCS &b, std::vector<size_t> &marker, std::vector<size_t> &col_nnz) {
+inline void Symbolic(size_t j, const CCS &a, const CCS &b, std::vector<size_t> &was, std::vector<size_t> &col_nnz) {
   size_t count = 0;
   for (size_t k = b.col_ind[j]; k < b.col_ind[j + 1]; ++k) {
     const size_t b_row = b.row[k];
     for (size_t zc = a.col_ind[b_row]; zc < a.col_ind[b_row + 1]; ++zc) {
       const size_t a_row = a.row[zc];
-      if (marker[a_row] != j) {
-        marker[a_row] = j;
+      if (was[a_row] != j) {
+        was[a_row] = j;
         ++count;
       }
     }
@@ -29,17 +29,17 @@ inline void Symbolic(size_t j, const CCS &a, const CCS &b, std::vector<size_t> &
   col_nnz[j] = count;
 }
 
-inline void Numeric(size_t j, const CCS &a, const CCS &b, CCS &c, size_t stamp, std::vector<size_t> &marker,
-                    std::vector<double> &acc, std::vector<size_t> &rows) {
+inline void Numeric(size_t j, const CCS &a, const CCS &b, CCS &c, size_t stamp, std::vector<size_t> &was,
+                    std::vector<double> &accum, std::vector<size_t> &rows) {
   rows.clear();
   for (size_t k = b.col_ind[j]; k < b.col_ind[j + 1]; ++k) {
     const double b_val = b.value[k];
     const size_t b_row = b.row[k];
     for (size_t zc = a.col_ind[b_row]; zc < a.col_ind[b_row + 1]; ++zc) {
       const size_t a_row = a.row[zc];
-      acc[a_row] += a.value[zc] * b_val;
-      if (marker[a_row] != stamp) {
-        marker[a_row] = stamp;
+      accum[a_row] += a.value[zc] * b_val;
+      if (was[a_row] != stamp) {
+        was[a_row] = stamp;
         rows.push_back(a_row);
       }
     }
@@ -48,8 +48,8 @@ inline void Numeric(size_t j, const CCS &a, const CCS &b, CCS &c, size_t stamp, 
   size_t write = c.col_ind[j];
   for (const size_t i : rows) {
     c.row[write] = i;
-    c.value[write] = acc[i];
-    acc[i] = 0.0;
+    c.value[write] = accum[i];
+    accum[i] = 0.0;
     ++write;
   }
 }
@@ -83,10 +83,10 @@ bool KulikAMatMulDoubleCcsOMP::RunImpl() {
 
 #pragma omp parallel default(none) shared(a, b, col_nnz)
   {
-    std::vector<size_t> marker(a.n, std::numeric_limits<size_t>::max());
+    std::vector<size_t> was(a.n, std::numeric_limits<size_t>::max());
 #pragma omp for schedule(static)
     for (size_t j = 0; j < b.m; ++j) {
-      Symbolic(j, a, b, marker, col_nnz);
+      Symbolic(j, a, b, was, col_nnz);
     }
   }
 
@@ -102,12 +102,12 @@ bool KulikAMatMulDoubleCcsOMP::RunImpl() {
 
 #pragma omp parallel default(none) shared(a, b, c)
   {
-    std::vector<size_t> marker(a.n, std::numeric_limits<size_t>::max());
-    std::vector<double> acc(a.n, 0.0);
+    std::vector<size_t> was(a.n, std::numeric_limits<size_t>::max());
+    std::vector<double> accum(a.n, 0.0);
     std::vector<size_t> rows;
 #pragma omp for schedule(static)
     for (size_t j = 0; j < b.m; ++j) {
-      Numeric(j, a, b, c, b.m + j, marker, acc, rows);
+      Numeric(j, a, b, c, b.m + j, was, accum, rows);
     }
   }
 

@@ -290,8 +290,7 @@ bool KulikAMatMulDoubleCcsALL::RunImpl() {
   CCS local_b;
   ScatterB(b, local_b, col_starts, world_rank, world_size);
 
-  const size_t local_cols = static_cast<size_t>(local_b.m);
-  const int omp_threads = std::max(1, ppc::util::GetNumThreads());
+  const auto local_cols = static_cast<size_t>(local_b.m);
 
   CCS local_c;
   local_c.m = local_b.m;
@@ -300,7 +299,7 @@ bool KulikAMatMulDoubleCcsALL::RunImpl() {
 
   std::vector<size_t> col_nnz(local_cols, 0);
 
-#pragma omp parallel num_threads(omp_threads) default(none) shared(a, local_b, col_nnz, local_cols)
+#pragma omp parallel num_threads(std::max(1, ppc::util::GetNumThreads())) default(none) shared(a, local_b, col_nnz, local_cols)
   {
     std::vector<size_t> marker(static_cast<size_t>(a.n), std::numeric_limits<size_t>::max());
 #pragma omp for schedule(static)
@@ -319,7 +318,7 @@ bool KulikAMatMulDoubleCcsALL::RunImpl() {
   local_c.value.resize(total_nz);
   local_c.row.resize(total_nz);
 
-#pragma omp parallel num_threads(omp_threads) default(none) shared(a, local_b, local_c, local_cols)
+#pragma omp parallel num_threads(std::max(1, ppc::util::GetNumThreads())) default(none) shared(a, local_b, local_c, local_cols)
   {
     std::vector<size_t> marker(static_cast<size_t>(a.n), std::numeric_limits<size_t>::max());
     std::vector<double> acc(static_cast<size_t>(a.n), 0.0);
