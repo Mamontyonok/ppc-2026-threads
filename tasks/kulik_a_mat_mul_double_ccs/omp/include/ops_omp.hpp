@@ -1,5 +1,8 @@
 #pragma once
 
+#include <cstddef>
+#include <vector>
+
 #include "kulik_a_mat_mul_double_ccs/common/include/common.hpp"
 #include "task/include/task.hpp"
 
@@ -17,6 +20,11 @@ class KulikAMatMulDoubleCcsOMP : public BaseTask {
   bool PreProcessingImpl() override;
   bool RunImpl() override;
   bool PostProcessingImpl() override;
+  static void ProcessColumn(size_t j, int tid, const CCS &a, const CCS &b,
+                            std::vector<std::vector<double>> &thread_accum, std::vector<std::vector<bool>> &thread_nz,
+                            std::vector<std::vector<size_t>> &thread_nnz_rows,
+                            std::vector<std::vector<double>> &flat_vals, std::vector<std::vector<size_t>> &flat_rows,
+                            std::vector<size_t> &col_nnz);
 };
 
 }  // namespace kulik_a_mat_mul_double_ccs
