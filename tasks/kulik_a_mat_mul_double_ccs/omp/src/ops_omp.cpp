@@ -14,7 +14,7 @@ namespace kulik_a_mat_mul_double_ccs {
 
 namespace {
 
-inline void mat_mult_phase1(size_t j, const CCS &a, const CCS &b, std::vector<size_t> &was,
+inline void MatMultPhase1(size_t j, const CCS &a, const CCS &b, std::vector<size_t> &was,
                             std::vector<size_t> &col_nnz) {
   size_t count = 0;
   for (size_t k = b.col_ind[j]; k < b.col_ind[j + 1]; ++k) {
@@ -30,7 +30,7 @@ inline void mat_mult_phase1(size_t j, const CCS &a, const CCS &b, std::vector<si
   col_nnz[j] = count;
 }
 
-inline void mat_mult_phase2(size_t j, const CCS &a, const CCS &b, CCS &c, size_t stamp, std::vector<size_t> &was,
+inline void MatMultPhase2(size_t j, const CCS &a, const CCS &b, CCS &c, size_t stamp, std::vector<size_t> &was,
                             std::vector<double> &accum, std::vector<size_t> &rows) {
   rows.clear();
   for (size_t k = b.col_ind[j]; k < b.col_ind[j + 1]; ++k) {
@@ -87,7 +87,7 @@ bool KulikAMatMulDoubleCcsOMP::RunImpl() {
     std::vector<size_t> was(a.n, std::numeric_limits<size_t>::max());
 #pragma omp for schedule(static)
     for (size_t j = 0; j < b.m; ++j) {
-      mat_mult_phase1(j, a, b, was, col_nnz);
+      MatMultPhase1(j, a, b, was, col_nnz);
     }
   }
 
@@ -108,7 +108,7 @@ bool KulikAMatMulDoubleCcsOMP::RunImpl() {
     std::vector<size_t> rows;
 #pragma omp for schedule(static)
     for (size_t j = 0; j < b.m; ++j) {
-      mat_mult_phase2(j, a, b, c, b.m + j, was, accum, rows);
+      MatMultPhase2(j, a, b, c, b.m + j, was, accum, rows);
     }
   }
 
