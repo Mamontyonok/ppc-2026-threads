@@ -64,14 +64,14 @@ inline std::vector<int> BuildBalancedStarts(const std::vector<size_t> &weights, 
   return starts;
 }
 
-inline void Symbolic(size_t j, const CCS &a, const CCS &b, std::vector<size_t> &marker, std::vector<size_t> &col_nnz) {
+inline void MatMultPhase1(size_t j, const CCS &a, const CCS &b, std::vector<size_t> &was, std::vector<size_t> &col_nnz) {
   size_t count = 0;
   for (size_t k = b.col_ind[j]; k < b.col_ind[j + 1]; ++k) {
     const size_t b_row = b.row[k];
     for (size_t zc = a.col_ind[b_row]; zc < a.col_ind[b_row + 1]; ++zc) {
       const size_t a_row = a.row[zc];
-      if (marker[a_row] != j) {
-        marker[a_row] = j;
+      if (was[a_row] != j) {
+        was[a_row] = j;
         ++count;
       }
     }
@@ -79,17 +79,17 @@ inline void Symbolic(size_t j, const CCS &a, const CCS &b, std::vector<size_t> &
   col_nnz[j] = count;
 }
 
-inline void Numeric(size_t j, const CCS &a, const CCS &b, CCS &c, size_t stamp, std::vector<size_t> &marker,
-                    std::vector<double> &acc, std::vector<size_t> &rows) {
+inline void MatMultPhase2(size_t j, const CCS &a, const CCS &b, CCS &c, size_t stamp, std::vector<size_t> &was,
+                    std::vector<double> &accum, std::vector<size_t> &rows) {
   rows.clear();
   for (size_t k = b.col_ind[j]; k < b.col_ind[j + 1]; ++k) {
     const double b_val = b.value[k];
     const size_t b_row = b.row[k];
     for (size_t zc = a.col_ind[b_row]; zc < a.col_ind[b_row + 1]; ++zc) {
       const size_t a_row = a.row[zc];
-      acc[a_row] += a.value[zc] * b_val;
-      if (marker[a_row] != stamp) {
-        marker[a_row] = stamp;
+      accum[a_row] += a.value[zc] * b_val;
+      if (was[a_row] != stamp) {
+        was[a_row] = stamp;
         rows.push_back(a_row);
       }
     }
@@ -98,8 +98,8 @@ inline void Numeric(size_t j, const CCS &a, const CCS &b, CCS &c, size_t stamp, 
   size_t write = c.col_ind[j];
   for (const size_t i : rows) {
     c.row[write] = i;
-    c.value[write] = acc[i];
-    acc[i] = 0.0;
+    c.value[write] = accum[i];
+    accum[i] = 0.0;
     ++write;
   }
 }
@@ -302,10 +302,10 @@ bool KulikAMatMulDoubleCcsALL::RunImpl() {
 #pragma omp parallel num_threads(std::max(1, ppc::util::GetNumThreads())) default(none) \
     shared(a, local_b, col_nnz, local_cols)
   {
-    std::vector<size_t> marker(static_cast<size_t>(a.n), std::numeric_limits<size_t>::max());
+    std::vector<size_t> was(static_cast<size_t>(a.n), std::numeric_limits<size_t>::max());
 #pragma omp for schedule(static)
     for (size_t j = 0; j < local_cols; ++j) {
-      Symbolic(j, a, local_b, marker, col_nnz);
+      MatMultPhase1(j, a, local_b, was, col_nnz);
     }
   }
 
@@ -322,12 +322,12 @@ bool KulikAMatMulDoubleCcsALL::RunImpl() {
 #pragma omp parallel num_threads(std::max(1, ppc::util::GetNumThreads())) default(none) \
     shared(a, local_b, local_c, local_cols)
   {
-    std::vector<size_t> marker(static_cast<size_t>(a.n), std::numeric_limits<size_t>::max());
-    std::vector<double> acc(static_cast<size_t>(a.n), 0.0);
+    std::vector<size_t> was(static_cast<size_t>(a.n), std::numeric_limits<size_t>::max());
+    std::vector<double> accum(static_cast<size_t>(a.n), 0.0);
     std::vector<size_t> rows;
 #pragma omp for schedule(static)
     for (size_t j = 0; j < local_cols; ++j) {
-      Numeric(j, a, local_b, local_c, local_cols + j, marker, acc, rows);
+      MatMultPhase2(j, a, local_b, local_c, local_cols + j, was, accum, rows);
     }
   }
 
