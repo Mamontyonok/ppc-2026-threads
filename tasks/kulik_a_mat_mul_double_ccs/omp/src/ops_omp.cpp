@@ -18,8 +18,8 @@ inline void Symbolic(size_t j, const CCS &a, const CCS &b, std::vector<size_t> &
   size_t count = 0;
   for (size_t k = b.col_ind[j]; k < b.col_ind[j + 1]; ++k) {
     const size_t b_row = b.row[k];
-    for (size_t zp = a.col_ind[b_row]; zp < a.col_ind[b_row + 1]; ++zp) {
-      const size_t a_row = a.row[zp];
+    for (size_t zc = a.col_ind[b_row]; zc < a.col_ind[b_row + 1]; ++zc) {
+      const size_t a_row = a.row[zc];
       if (marker[a_row] != j) {
         marker[a_row] = j;
         ++count;
@@ -35,9 +35,9 @@ inline void Numeric(size_t j, const CCS &a, const CCS &b, CCS &c, size_t stamp, 
   for (size_t k = b.col_ind[j]; k < b.col_ind[j + 1]; ++k) {
     const double b_val = b.value[k];
     const size_t b_row = b.row[k];
-    for (size_t zp = a.col_ind[b_row]; zp < a.col_ind[b_row + 1]; ++zp) {
-      const size_t a_row = a.row[zp];
-      acc[a_row] += a.value[zp] * b_val;
+    for (size_t zc = a.col_ind[b_row]; zc < a.col_ind[b_row + 1]; ++zc) {
+      const size_t a_row = a.row[zc];
+      acc[a_row] += a.value[zc] * b_val;
       if (marker[a_row] != stamp) {
         marker[a_row] = stamp;
         rows.push_back(a_row);
