@@ -94,7 +94,7 @@ TBB разбивает диапазон столбцов `[0, b.m)` на бло�
 
     ┌──────────────────────────────────────────────────────────────┐
     │  tbb::parallel_for(blocked_range(0, b.m))                    │
-    │  tls_was: enumerable_thread_specific (ленивая инициализация) │
+    │  tls_was: enumerable_thread_specific                         │
     │                                                              │
     │  ┌──────────┬──────────┬──────────┬──────────┐              │
     │  │ chunk 0  │ chunk 1  │   ...    │ chunk N  │  потоки      │
