@@ -5,12 +5,12 @@
 
 namespace kulik_a_mat_mul_double_ccs {
 
-class KulikAMatMulDoubleCcsOMP : public BaseTask {
+class KulikAMatMulDoubleCcsALL : public BaseTask {
  public:
   static constexpr ppc::task::TypeOfTask GetStaticTypeOfTask() {
-    return ppc::task::TypeOfTask::kOMP;
+    return ppc::task::TypeOfTask::kALL;
   }
-  explicit KulikAMatMulDoubleCcsOMP(const InType &in);
+  explicit KulikAMatMulDoubleCcsALL(const InType &in);
 
  private:
   bool ValidationImpl() override;
